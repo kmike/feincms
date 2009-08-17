@@ -13,7 +13,7 @@ from django.forms.models import model_to_dict
 from django.forms.util import ErrorList
 from django.http import Http404, HttpResponseRedirect
 from django.utils.safestring import mark_safe
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import ugettext_lazy as _, ugettext
 
 import mptt
 
@@ -191,6 +191,14 @@ class Page(Base):
 
     def __unicode__(self):
         return mark_safe('&nbsp;&nbsp;' * self.level + self.short_title())
+
+    def is_active(self):
+        """
+        Check whether this page and all its ancestors are active
+        """
+
+        pages = Page.objects.active().filter(tree_id=self.tree_id, lft__lte=self.lft, rght__gte=self.rght)
+        return pages.count() > self.level
 
     def are_ancestors_active(self):
         """
@@ -597,6 +605,31 @@ class PageAdmin(editor.ItemEditor, list_modeladmin):
         self._visible_pages = list(self.model.objects.active().values_list('id', flat=True))
 
     # ---------------------------------------------------------------------
+    def change_view(self, request, object_id, extra_context=None):
+        from django.shortcuts import get_object_or_404
+        if 'create_copy' in request.GET:
+            page = get_object_or_404(Page, pk=object_id)
+            new = Page.objects.create_copy(page)
+            self.message_user(request, ugettext("You may edit the copied page below."))
+            return HttpResponseRedirect('../%s/' % new.pk)
+        elif 'replace' in request.GET:
+            page = get_object_or_404(Page, pk=request.GET.get('replace'))
+            with_page = get_object_or_404(Page, pk=object_id)
+            Page.objects.replace(page, with_page)
+            self.message_user(request, ugettext("You have replaced %s. You may continue editing the now-active page below.") % page)
+            return HttpResponseRedirect('.')
+
+        return super(PageAdmin, self).change_view(request, object_id, extra_context)
+
+    def render_item_editor(self, request, object, context):
+        try:
+            active = Page.objects.active().exclude(pk=object.pk).get(_cached_url=object._cached_url)
+            context['to_replace'] = active
+        except Page.DoesNotExist:
+            pass
+
+        return super(PageAdmin, self).render_item_editor(request, object, context)
+
     def is_visible_admin(self, page):
         """
         Instead of just showing an on/off boolean, also indicate whether this
